@@ -4,7 +4,8 @@ ACTIONS = ('U', 'D', 'L', 'R')
 DELTA_THRESHOLD = 1e-3
 GAMMA = 0.9
 
-# 격자 공간의 클래스를 정의
+TRANSITION_PROB = 0.8
+
 class Grid: 
 	def __init__(self, rows, cols, start):
 		self.rows = rows
@@ -12,7 +13,6 @@ class Grid:
 		self.i = start[0]
 		self.j = start[1]
 
-	# 각 상태의 보상과 선택 가능한 행동을 설정
 	def set(self, rewards, actions):
 		self.rewards = rewards
 		self.actions = actions
@@ -24,6 +24,7 @@ class Grid:
 	def current_state(self):
 		return (self.i, self.j)
 
+	# check state is finish 
 	def is_terminal(self, s):
 		return s not in self.actions
 
@@ -37,17 +38,77 @@ class Grid:
 				self.j += 1
 			elif action == 'L':
 				self.j -= 1
-	    # 보상이 있을 경우 보상을 반환
 		return self.rewards.get((self.i, self.j), 0)
 
-	# 모든 상태를 반환
 	def all_states(self):
 		# possibly buggy but simple way to get all states
 		# either a position that has possible next actions
 		# or a position that yields a reward
 		return set(self.actions.keys()) | set(self.rewards.keys())
 
-# 격자 공간과 각 상태에서 선택 가능한 행동을 정의
+	def set_transition_prob(self, transition_prob):
+		self.transition_prob_intended = transition_prob
+		self.transition_prob_unintended = (1 - transition_prob) / 2
+
+	def get_transition_prob(self, action):
+		currentState = (self.i, self.j)
+		transitions = []
+		if self.is_terminal(currentState):
+			return transitions
+		# intended
+		if action in self.actions[currentState]:
+			r = self.move(action)
+			transitions.append((self.transition_prob_intended, r, (self.i, self.j)))
+			self.set_state(currentState)
+		# unintended
+		if (action == 'U' )| (action == 'D'):
+			if 'L' in self.actions[currentState]:
+				r = self.move('L')
+				transitions.append((self.transition_prob_unintended, r, (self.i, self.j)))
+				self.set_state(currentState)
+			else:
+				transitions.append((self.transition_prob_unintended, 0, currentState))
+			if 'R' in self.actions[currentState]:
+				r = self.move('R')
+				transitions.append((self.transition_prob_unintended, r, (self.i, self.j)))
+				self.set_state(currentState)
+			else:
+				transitions.append((self.transition_prob_unintended, 0, currentState))
+		elif (action == 'L') | (action == 'R'):
+			if 'U' in self.actions[currentState]:
+				r = self.move('U')
+				transitions.append((self.transition_prob_unintended, r, (self.i, self.j)))
+				self.set_state(currentState)
+			else:
+				transitions.append((self.transition_prob_unintended, 0, currentState))
+			if 'D' in self.actions[currentState]:
+				r = self.move('D')
+				transitions.append((self.transition_prob_unintended, r, (self.i, self.j)))
+				self.set_state(currentState)
+			else:
+				transitions.append((self.transition_prob_unintended, 0, currentState))
+
+		return transitions
+
+def best_action_value(grid, V, s):
+	bestAction = None
+	bestValue = float('-inf')
+	grid.set_state(s)
+	for action in ACTIONS:
+		transitions = grid.get_transition_prob(action)
+		rewardExpectation = 0
+		valueExpectation = 0
+		# calc expectation of reward, value
+		for (prob, r, nextState) in transitions:
+			rewardExpectation += prob * r
+			valueExpectation += prob * V[nextState]
+		# Bellman eq
+		value = rewardExpectation + GAMMA * valueExpectation
+		if value > bestValue:
+			bestValue = value
+			bestAction = action
+	return bestAction, bestValue
+
 def standard_grid():
 	grid = Grid(3, 4, (2, 0))
 	rewards = {(0, 3): 1, (1, 3): -1}
@@ -63,6 +124,7 @@ def standard_grid():
 		(2, 3): ('L', 'U'),
 	}
 	grid.set(rewards, actions)
+	grid.set_transition_prob(TRANSITION_PROB)
 	return grid
 
 def print_values(V, grid):
@@ -85,23 +147,23 @@ def print_policy(P, grid):
 		print("")
 
 if __name__ == '__main__':
-    # 격자 공간을 초기화
+    
 	grid = standard_grid()
 
-	# 보상을 출력
-	print("\n보상: ")
+	
+	print("\n reward: ")
 	print_values(grid.rewards, grid)
 
-	# 초기 정책은 각 상태에서 선택 가능한 행동을 무작위로 선택
+	# get init policy
 	policy = {}
 	for s in grid.actions.keys():
 		policy[s] = np.random.choice(ACTIONS)
 
-	# 정책 초기화
-	print("\n초기 정책:")
+	
+	print("\n init policy:")
 	print_policy(policy, grid)
 
-	# 가치 함수 V(s) 초기화
+	# get init value function
 	V = {}
 	states = grid.all_states()
 	for s in states:
@@ -109,53 +171,34 @@ if __name__ == '__main__':
 		if s in grid.actions:
 			V[s] = np.random.random()
 		else:
-			# 종단 상태
+			
 			V[s] = 0
 
-	# 수렴할 때까지 반복
+	# value iteration
 	i = 0
 	while True:
 		maxChange = 0
-		for s in states:
+		for s in grid.actions.keys():
 			oldValue = V[s]
+			_, newValue = best_action_value(grid, V, s)
+			V[s] = newValue
+			maxChange = max(maxChange, np.abs(oldValue - V[s]))
 
-			# 종단 상태가 아닌 상태에 대해서만 V(s)를 계산
-			if s in policy:
-				newValue = float('-inf')
-				for a in ACTIONS:
-					grid.set_state(s)
-					r = grid.move(a)
-					# 벨만 방정식 계산
-					v = r + GAMMA * V[grid.current_state()]
-					if v > newValue:
-						newValue = v
-				V[s] = newValue
-				maxChange = max(maxChange, np.abs(oldValue - V[s]))
-
-		print("\n%i  번째 반복" % i, end = "\n")
+		print("\n%i iteration" % i, end = "\n")
 		print_values(V, grid)
 		i += 1 
 
 		if maxChange < DELTA_THRESHOLD:
 			break
 
-	# 최적 가치 함수를 찾는 정책을 도출
+	
 	for s in policy.keys():
-		bestAction = None
-		bestValue = float('-inf')
-		# 가능한 모든 행동에 대해 반복
-		for a in ACTIONS:
-			grid.set_state(s)
-			r = grid.move(a)
-			v = r + GAMMA * V[grid.current_state()]
-			if v > bestValue:
-				bestValue = v
-				bestAction = a
+		bestAction, _ = best_action_value(grid, V, s)
 		policy[s] = bestAction
 
-	# 계산된 가치 함수와 정책을 출력
-	print("\n가치 함수: ")
+	
+	print("\n value function: ")
 	print_values(V, grid)
 
-	print("\n정책: ")
+	print("\n policy: ")
 	print_policy(policy, grid)
